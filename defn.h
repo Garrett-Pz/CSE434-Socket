@@ -8,11 +8,11 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#define BUFFERMAX 256     // Longest message to receive
+#define BUFFERMAX 1024     // Longest message to receive
 
 typedef enum{FREE = 1, LEADER, INDHT} State;
 
-struct user{
+struct user {
     char user_name[16];
     char ipAddr[16];
     unsigned short int portFrom;
@@ -22,7 +22,7 @@ struct user{
     struct user* next;
 };
 
-struct dht_user{
+struct dht_user {
     char user_name[16];
     char ipAddr[16];
     unsigned short int portFrom;
@@ -30,6 +30,18 @@ struct dht_user{
     unsigned short int portQuery;
 };
 
+struct dht_entry {
+    char countryCode[4];
+    char shortName[64];
+    char tableName[64];
+    char longName[128];
+    char alphaCode[3];
+    char currency[64];
+    char region[32];
+    char wbCode[3];
+    char latestCensus[254];
+    struct dht_entry* next;
+};
 
 
 
@@ -59,8 +71,37 @@ struct setup {
 };
 
 struct set_id {
+    char command;   // command 3
     int id;
     int ring_size;
     struct dht_user left;
     struct dht_user right;
+};
+
+struct dht_complete {
+    char command;   // command 4
+    char user_name[16];
+};
+
+struct store {
+    char command;   // command 5
+    struct dht_entry record;
+};
+
+struct query_dht {
+    char command;   // command 6
+    char user_name[16];
+    char ipAddr[16];
+    unsigned short int portQuery;
+};
+
+struct query {
+    char command;   // command 7
+    char longName[128];
+    struct sockaddr_in requesterAddr;
+};
+
+struct query_success {
+    char command;   // command 8
+    struct dht_entry record;
 };
