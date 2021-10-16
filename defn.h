@@ -105,3 +105,43 @@ struct query_success {
     char command;   // command 8
     struct dht_entry record;
 };
+
+struct leave_dht {
+    char command;   // command 9
+    char user_name[16];
+    int ring_size;
+};
+
+struct teardown {
+    char command;  // command 10
+    char FLAG;          // 0: Just remove DHT  1: Do full teardown
+};
+
+struct reset_id {
+    char command;  // command 11
+    int id;
+};
+
+struct reset_left {
+    char command;  // command 12
+    unsigned short int port;
+    struct sockaddr_in newAddr;
+};
+
+struct reset_right {
+    char command;  // command 13
+    struct sockaddr_in newAddr;
+};
+
+struct rebuild_dht {
+    char command;  // command 14
+    struct sockaddr_in addr;
+};
+
+struct dht_rebuilt {
+    char command;  // command 15
+    char user_name[16];
+    char new_leader[16];
+};
+
+

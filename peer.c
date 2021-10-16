@@ -15,6 +15,8 @@ void print_record(struct dht_entry);
 void process_query(struct query*);
 struct dht_entry* retrieve_record(char*, int);
 struct dht_entry copy_record(struct dht_entry*);
+void delete_dht();
+void delete_dht_list(struct dht_entry*);
 
 //GLOBAL VARS
 int sockServ;                   // Socket descriptors
@@ -31,6 +33,7 @@ char msgBuffer[ BUFFERMAX ];    // Buffer for received datagrams
 char ipAddr[16];                // IP Address of process
 
 char buf[64], command[64], *token;  // String buffers to hold command
+char user_name[16];                 // Username of process
 int id = -1;                        // DHT identifier. -1 indicates the host is not in a DHT
 int ring_size;                      // Size of DHT ring
 struct dht_entry** hashTable;       // This processes hash table
@@ -133,7 +136,7 @@ int main( int argc, char *argv[] ) {
         }
         //Check if the process has been sent information to its Recv port
         else if ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, MSG_DONTWAIT, (struct sockaddr *) &recvAddr, &recvAddrLen ) != -1 ) {
-            if(msgBuffer[0] == 5) {             // STORE COMMAND ------------------------------
+            if( msgBuffer[0] == 5 ) {               // STORE COMMAND ------------------------------
                 struct store* datagram = (struct store*) msgBuffer;
                 struct dht_entry* record = calloc(1, sizeof(struct dht_entry));
                 memcpy(record, &(datagram->record), sizeof(struct dht_entry));
@@ -144,6 +147,59 @@ int main( int argc, char *argv[] ) {
             else if( msgBuffer[0] == 7 ) {          // QUERY COMMAND ------------------------------
                 struct query* datagram = (struct query*) msgBuffer;
                 process_query(datagram);
+            }
+        
+            else if( msgBuffer[0] == 10 ) {         // TEARDOWN COMMAND ------------------------------
+                struct teardown* datagram = (struct teardown*) msgBuffer;
+
+                delete_dht();
+                if( datagram->FLAG ) delete_sockets(); 
+
+                // Propagate teardown command around ring
+                if( sendto( sockSend, datagram, sizeof(struct teardown), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(struct teardown) ) 
+                    DieWithError( "teardown: sendto() sent a different number of bytes than expected" );
+            }
+        
+            else if( msgBuffer[0] == 11 ) {         // RESET-ID COMMAND ------------------------------
+                struct reset_id* datagram = (struct reset_id*) msgBuffer;
+
+                id = datagram->id;
+                ring_size = ring_size - 1;
+                hashTable = calloc(353, sizeof(struct dht_entry*));
+
+                // Propagate reset_id command around ring
+                datagram->id += 1;
+                if( sendto( sockSend, datagram, sizeof(struct reset_id), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(struct reset_id) ) 
+                    DieWithError( "teardown: sendto() sent a different number of bytes than expected" );
+            }
+        
+            else if( msgBuffer[0] == 12 ) {         // RESET-LEFT COMMAND ------------------------------
+                struct reset_left* datagram = (struct reset_left*) msgBuffer;
+
+                // Check if this process is the left neighbor of the calling process
+                if(datagram->port == toAddr.sin_port) {
+                    toAddr = datagram->newAddr;
+                }
+                // If not the left neighbor, propagate message around ring
+                else {
+                    if( sendto( sockSend, datagram, sizeof(struct reset_left), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(struct reset_left) ) 
+                        DieWithError( "reset_left: sendto() sent a different number of bytes than expected" );
+                }
+            }
+
+            else if( msgBuffer[0] == 13 ) {         // RESET-RIGHT COMMAND ------------------------------
+                struct reset_right* datagram = (struct reset_right*) msgBuffer;
+            }
+        
+            else if( msgBuffer[0] == 14 ) {         // REBUILD-DHT COMMAND ------------------------------
+                struct rebuild_dht* datagram = (struct rebuild_dht*) msgBuffer;
+
+                // Build DHT
+                populate_dht();
+
+                // Send username
+                if( sendto( sockSend, user_name, sizeof(user_name), 0, (struct sockaddr *) &datagram->addr, sizeof(datagram->addr) ) != sizeof(user_name) ) 
+                    DieWithError( "rebuild_dht: sendto() sent a different number of bytes than expected" );
             }
         }     
         // If there are no packets, read from stdin       
@@ -159,7 +215,7 @@ int main( int argc, char *argv[] ) {
 
         if( strcmp( token, "register" ) == 0){          // REGISTER COMMAND ------------------------------
             
-            strtok(NULL, " ");      // Throwout user name
+            strcpy(user_name, strtok(NULL, " "));
             char* ip = strtok(NULL, " ");
             int portFrom = atoi(strtok(NULL, " "));
             int portTo = atoi(strtok(NULL, " "));
@@ -318,14 +374,124 @@ int main( int argc, char *argv[] ) {
                 }
                 // Query was unsuccessful; print failure
                 else {
-                    printf("%s", (char *) msgBuffer);
                     printf("Record associated with %s not found\n", queryName);
                 }
             }
 
         }
 
-        else if( strcmp( token, "stop" ) == 0){
+        else if( strcmp(token, "leave-dht") == 0) {     // LEAVE-DHT COMMAND ------------------------------
+            struct leave_dht datagram;
+            struct teardown teardown;
+            struct reset_id reset;
+            struct reset_left resetLeft;
+            struct reset_right resetRight;
+            struct rebuild_dht rebuild;
+            //struct dht_user r_neighbor;
+            //struct sockaddr_in addr;
+            struct dht_rebuilt rebuilt;
+            char* username;
+            char* new_leader;
+
+            // Create datagram
+            username = strtok(NULL, " ");
+            datagram.command = 9;
+            strcpy(datagram.user_name, username);
+            datagram.ring_size = ring_size;
+
+            // Send datagram to server
+            if( sendto( sockServ, &datagram, sizeof(datagram), 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != sizeof(datagram) ) 
+                DieWithError( "leave-dht: sendto() sent a different number of bytes than expected" );
+
+
+            // Receive Success/Failure message
+            if( ( recvfrom( sockServ, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                DieWithError( "leave-dht: recvfrom() failed" );
+
+
+            if( strcmp(msgBuffer, "FAILURE\n") == 0 ) {
+                printf("%s", (char *) msgBuffer);
+            }
+            // If success is received, rebuild dht
+            else {
+
+                // Send teardown to right neighbor
+                teardown.command = 10;
+                teardown.FLAG = 0;
+                if( sendto( sockSend, &teardown, sizeof(teardown), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(teardown) ) 
+                    DieWithError( "teardown: sendto() sent a different number of bytes than expected" );
+
+                // Receive teardown message
+                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "teardown: recvfrom() failed" );
+                if( msgBuffer[0] != 10 ) {
+                    printf("Teardown error\n");
+                    break;
+                }
+
+                // Delete local hash table
+                delete_dht();
+
+                // Send reset_id to right neighbor
+                reset.command = 11;
+                reset.id = 0;
+                if( sendto( sockSend, &reset, sizeof(reset), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(reset) ) 
+                    DieWithError( "reset_id: sendto() sent a different number of bytes than expected" );
+
+                // Receive reset_id message
+                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "reset_id: recvfrom() failed" );
+                id = -1;
+                ring_size = 0;
+
+                // Send reset_left / reset_right
+                resetLeft.command = 12;
+                resetLeft.newAddr = toAddr;
+                resetLeft.port = fromAddr.sin_port;     // Used to identify which process is the left neighbor
+                resetRight.command = 13;
+                resetRight.newAddr = fromAddr;
+
+                if( sendto( sockSend, &resetLeft, sizeof(resetLeft), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(resetLeft) ) 
+                    DieWithError( "reset_left: sendto() sent a different number of bytes than expected" );
+
+                if( sendto( sockSend, &resetRight, sizeof(resetRight), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(resetRight) ) 
+                    DieWithError( "reset_right: sendto() sent a different number of bytes than expected" );
+
+                /*
+                // Reveive user information of what was previously right neighbor
+                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "teardown: recvfrom() failed" );
+                r_neighbor = (struct dht_user*) msgBuffer;
+                printf("Right neigbor info received\n");
+
+                // Send rebuild-dht to query port of previous right neighbor
+                memset( &addr, 0, sizeof( addr ) );
+                addr.sin_family = AF_INET;
+                addr.sin_addr.s_addr = inet_addr( r_neighbor.ipAddr );
+                servAddr.sin_port = htons( r_neighbor.portQuery );
+                */
+
+                // Send rebuild-dht
+                rebuild.command = 14;
+                rebuild.addr = fromAddr;
+                if( sendto( sockSend, &rebuild, sizeof(rebuild), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(rebuild) ) 
+                    DieWithError( "rebuild_dht: sendto() sent a different number of bytes than expected" );
+                
+                // Receive username from new leader after dht is rebuilt
+                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "reveive new_leader: recvfrom() failed" );
+                new_leader = msgBuffer;
+
+                //Send dht_rebuilt to server
+                rebuilt.command = 15;
+                strcpy(rebuilt.user_name, user_name);
+                strcpy(rebuilt.new_leader, new_leader);
+                if( sendto( sockServ, &rebuilt, sizeof(rebuilt), 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != sizeof(rebuilt) ) 
+                    DieWithError( "dht_rebuilt: sendto() sent a different number of bytes than expected" );
+            }
+        }
+
+        else if( strcmp( token, "stop" ) == 0) {
             char c = 100;
 
             if( sendto( sockServ, &c, 1, 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != 1 )
@@ -335,7 +501,7 @@ int main( int argc, char *argv[] ) {
             exit(0);
         }
 
-        else if( strcmp( token, "test" ) == 0){
+        else if( strcmp( token, "test" ) == 0) {
              char c = 120;
 
             if( sendto( sockServ, &c, 1, 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != 1 )
@@ -590,12 +756,29 @@ struct dht_entry copy_record(struct dht_entry* record) {
     return copy;
 }
 
+void delete_dht() {     //Deletes local hash table
+    for(int i = 0; i < 353; i++) {
+        delete_dht_list(hashTable[i]);
+    }
+
+    free(hashTable);
+}
+
+void delete_dht_list(struct dht_entry* chain) {  // Deletes chain from hash table
+    if(chain == NULL) return;
+    delete_dht_list(chain->next);
+    free(chain);
+}
+
 
 /*
 
 run 10.120.70.145 29500
+
 register j 10.120.70.106 29501 29502 29503
+
 register k 10.120.70.145 29504 29505 29506
+
 register l 10.120.70.106 29507 29508 29509
 
 */
