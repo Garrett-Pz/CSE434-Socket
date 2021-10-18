@@ -11,6 +11,8 @@ int is_in(char* name, struct dht_user*, int);
 struct user* create_rand_list( struct user*, int, struct dht_user*, int);
 struct user* get_random_user(struct user*, int);
 struct user* get_leader(struct user*);
+int get_ring_size(struct user*);
+void set_free(struct user*);
 
 // Utility functions
 void DieWithError( const char *errorMessage ) // External error handling function
@@ -112,13 +114,22 @@ int main( int argc, char *argv[] )
         else if( msgBuffer[0] == 1 ) {  // CODE FOR DEREGISTER COMMAND -----------------------------------------
 
             struct deregister* datagram = (struct deregister *) msgBuffer;  //Extract data given by client
+            struct user* user = find_user(datagram->user_name, user_list);
 
-            if( deregister(datagram->user_name, &user_list) ) {  //Deregister
+            // Failure conditions
+            if(user == NULL) {
+                printf("Error: User is not registered\n");
+                failure(sock, ClntAddr);
+            }
+            if(user->state != FREE) {
+                printf("Error: User is maintaining DHT\n");
+            }
+            else {
+                deregister(datagram->user_name, &user_list);  //Deregister
+                printf("User %s deregistered\n", datagram->user_name);
                 success(sock, ClntAddr);
                 users--;
             }
-            else
-                failure(sock, ClntAddr);
 
         }
 
@@ -161,7 +172,6 @@ int main( int argc, char *argv[] )
                 if( sendto( sock, dht_users, size , 0, (struct sockaddr *) &ClntAddr, sizeof( ClntAddr ) ) != size )
        		        DieWithError( "setup-dht: sendto() sent a different number of bytes than expected" );
                 
-                printf("DHT Being Created\n");
                 dhtCreated = 2;
                 free(dht_users);
             }
@@ -179,6 +189,7 @@ int main( int argc, char *argv[] )
             printf("DHT Setup Complete\n");
             dhtCreated = 1;
             success(sock, ClntAddr);
+
         }
 
         else if ( msgBuffer[0] == 6 ) { // CODE FOR QUERY-DHT COMMAND -----------------------------------------
@@ -213,11 +224,9 @@ int main( int argc, char *argv[] )
                 strcpy(query.ipAddr, randomUser->ipAddr);
                 query.portQuery = randomUser->portQuery;
 
-                printf("Sent Random User\n");
                 if( sendto( sock, &query, sizeof(query) , 0, (struct sockaddr *) &ClntAddr, sizeof( ClntAddr ) ) != sizeof(query) )
        		        DieWithError( "query-dht: sendto() sent a different number of bytes than expected" );
             }
-
 
         }
 
@@ -249,6 +258,7 @@ int main( int argc, char *argv[] )
                 dhtCreated = 2;
                 success(sock, ClntAddr);
             }
+
         }
 
         else if ( msgBuffer[0] == 15 ) { // CODE FOR DHT-REBUILT COMMAND -----------------------------------------
@@ -260,34 +270,115 @@ int main( int argc, char *argv[] )
 
             //Failure conditions
             if(strcmp(datagram->user_name, user_tmp) != 0) {
-                printf("Error: User is not the initiator of leave-dht\n");
+                printf("Error: DHT Rebuilt user did not send the initiating command\n");
                 failure(sock, ClntAddr);
             }
 
-            user->state = FREE;
-            old_leader->state = INDHT;
-            new_leader->state = LEADER;
-            dhtCreated = 1;
-            printf("%s has left the DHT\n", user->user_name);
+            if(datagram->FLAG) {      // JOIN-DHT
+                old_leader->state = INDHT;
+                user->state = FREE;
+                new_leader->state = LEADER;
+                dhtCreated = 1;
+                printf("%s has joined the DHT\n", user->user_name);
+            }
+            else {          // LEAVE-DHT
+                old_leader->state = INDHT;
+                user->state = FREE;
+                new_leader->state = LEADER;
+                dhtCreated = 1;
+                printf("%s has left the DHT\n", user->user_name);
+            }
+
+        }
+
+        else if ( msgBuffer[0] == 16 ) { // CODE FOR JOIN-DHT COMMAND -----------------------------------------
+
+            struct join_dht* datagram = (struct join_dht*) msgBuffer;
+            struct user* user = find_user(datagram->user_name, user_list);
+            struct user* leader = get_leader(user_list);
+            struct join_dht join;
+
+            // Failure conditions
+            if( dhtCreated == 0 ){
+                printf("Error: DHT does not exist\n");
+                failure(sock, ClntAddr);
+            }
+            else if( user == NULL ) {
+                printf("Error: User not registered\n");
+                failure(sock, ClntAddr);
+            }
+            else if( user->state != FREE ) {
+                printf("Error: User is already involved in maintaining DHT\n");
+                failure(sock, ClntAddr);
+            }
+            // Success
+            else {
+                strcpy(user_tmp, datagram->user_name);
+                dhtCreated = 2;
+                
+                join.command = 16;
+                strcpy(join.user_name, user->user_name);
+                join.leader = create_dht_user(leader);
+                join.ring_size = get_ring_size(user_list);
+
+                if( sendto( sock, &join, sizeof(join) , 0, (struct sockaddr *) &ClntAddr, sizeof( ClntAddr ) ) != sizeof(join) )
+       		        DieWithError( "join-dht: sendto() sent a different number of bytes than expected" );
+            }
+
+        }
+
+        else if ( msgBuffer[0] == 17 ) { // CODE FOR TEARDOWN-DHT COMMAND -----------------------------------------
+
+            struct teardown_dht* datagram = (struct teardown_dht*) msgBuffer;
+            struct user* leader = find_user(datagram->user_name, user_list);
+
+            // Failure conditions
+            if( dhtCreated == 0 ) {
+                printf("Error: DHT not created\n");
+                failure(sock,ClnetAddr);
+            }
+            if( leader == NULL ) {
+                printf("Error: User not registered\n");
+                failure(sock, ClntAddr);
+            }
+            else if( leader->state != LEADER ) {
+                printf("Error: User is not the leader\n");
+                failure(sock, ClntAddr);
+            }
+            // Success
+            else success(sock, ClntAddr);
+
+        }
+
+        else if ( msgBuffer[0] == 18 ) { // CODE FOR TEARDOWN-COMPLETE COMMAND -----------------------------------------
+
+            struct teardown_complete* datagram = (struct teardown_complete*) msgBuffer;
+            struct user* leader = find_user(datagram->user_name, user_list);
+
+            // Failure conditions
+            if( leader == NULL ) {
+                printf("Error: User not registered\n");
+                failure(sock, ClntAddr);
+            }
+            else if( leader->state != LEADER ) {
+                printf("Error: User is not the leader\n");
+                failure(sock, ClntAddr);
+            }
+            // Success
+            else {
+                // Set the state of every user to free
+                set_free(user_list);
+                dhtCreated = 0;
+
+                printf("DHT Torn down\n");
+                success(sock, ClntAddr);
+            }
         }
 
         else if( msgBuffer[0] == 120 ) {
+
             printf("Successful Test\n");
 
-            /*
-            struct sockaddr_in addr;
-
-            memset( &addr, 0, sizeof( addr ) ); // Zero out structure
-            addr.sin_family = AF_INET;                  // Internet address family
-            addr.sin_addr.s_addr = inet_addr( "10.120.70.106" ); // Any incoming interface
-            addr.sin_port = htons( 29501 );      // Local port
-
-            char c = 100;
-            if( sendto( sock, &c, 1, 0, (struct sockaddr *) &addr, sizeof( addr ) ) != 1 )
-       		    DieWithError( "sendto() sent a different number of bytes than expected" );  
-            //close(sock);
-            //exit(0);
-            */
         }
     }
 }
@@ -425,14 +516,30 @@ struct user* get_random_user(struct user* list, int users) {
 }
 
 struct user* get_leader(struct user* list) {
-    struct user* leader;
-
     while(list != NULL) {
         if(list->state == LEADER) break;
         list = list->next;
     }
 
-    return leader;
+    if(list == NULL) return NULL;
+    else return list;
 }
 
+int get_ring_size(struct user* list) {
+    int size;
+
+    while(list != NULL) {
+        if(list->state != FREE) size++;
+        list = list->next;
+    }
+
+    return size;
+}
+
+void set_free(struct user* list) {
+    while(list != NULL) {
+        list->state = FREE;
+        list = list->next;
+    }
+}
 

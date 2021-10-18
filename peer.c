@@ -153,7 +153,6 @@ int main( int argc, char *argv[] ) {
                 struct teardown* datagram = (struct teardown*) msgBuffer;
 
                 delete_dht();
-                if( datagram->FLAG ) delete_sockets(); 
 
                 // Propagate teardown command around ring
                 if( sendto( sockSend, datagram, sizeof(struct teardown), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(struct teardown) ) 
@@ -164,11 +163,12 @@ int main( int argc, char *argv[] ) {
                 struct reset_id* datagram = (struct reset_id*) msgBuffer;
 
                 id = datagram->id;
-                ring_size = ring_size - 1;
+                ring_size = datagram->ring_size;
                 hashTable = calloc(353, sizeof(struct dht_entry*));
 
                 // Propagate reset_id command around ring
                 datagram->id += 1;
+                printf("New ID: %d, New Ring Size: %d\n", id, ring_size);
                 if( sendto( sockSend, datagram, sizeof(struct reset_id), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(struct reset_id) ) 
                     DieWithError( "teardown: sendto() sent a different number of bytes than expected" );
             }
@@ -256,7 +256,7 @@ int main( int argc, char *argv[] ) {
                 close(sockRecv);
                 close(sockSend);
                 close(sockQuery);
-                //exit(0);
+                exit(0);
             }       
 
         }
@@ -280,7 +280,6 @@ int main( int argc, char *argv[] ) {
                 DieWithError( "setup: recvfrom() failed" );
             
             // If success is received, then receive the list
-            printf("%s", (char *) msgBuffer);
             if( strcmp(msgBuffer, "SUCCESS\n") == 0 ) {
                 char c = 0;
 
@@ -289,7 +288,6 @@ int main( int argc, char *argv[] ) {
                     DieWithError( "setup: recvfrom() failed" );   
 
                 // Extract List
-                printf("DHT Users Received\n");
                 struct dht_user* dht_users = (struct dht_user *) msgBuffer;
                 
                 // Setup DHT
@@ -341,7 +339,6 @@ int main( int argc, char *argv[] ) {
             else {
                 // Extract info of intial node to query
                 response = (struct query_dht*) msgBuffer;
-                printf("Received User %s\n", response->user_name);
 
                 memset( &dhtNode, 0, sizeof( dhtNode ) );
                 dhtNode.sin_family = AF_INET;
@@ -387,8 +384,6 @@ int main( int argc, char *argv[] ) {
             struct reset_left resetLeft;
             struct reset_right resetRight;
             struct rebuild_dht rebuild;
-            //struct dht_user r_neighbor;
-            //struct sockaddr_in addr;
             struct dht_rebuilt rebuilt;
             char* username;
             char* new_leader;
@@ -417,7 +412,6 @@ int main( int argc, char *argv[] ) {
 
                 // Send teardown to right neighbor
                 teardown.command = 10;
-                teardown.FLAG = 0;
                 if( sendto( sockSend, &teardown, sizeof(teardown), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(teardown) ) 
                     DieWithError( "teardown: sendto() sent a different number of bytes than expected" );
 
@@ -435,6 +429,7 @@ int main( int argc, char *argv[] ) {
                 // Send reset_id to right neighbor
                 reset.command = 11;
                 reset.id = 0;
+                reset.ring_size = ring_size - 1;
                 if( sendto( sockSend, &reset, sizeof(reset), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(reset) ) 
                     DieWithError( "reset_id: sendto() sent a different number of bytes than expected" );
 
@@ -457,20 +452,6 @@ int main( int argc, char *argv[] ) {
                 if( sendto( sockSend, &resetRight, sizeof(resetRight), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(resetRight) ) 
                     DieWithError( "reset_right: sendto() sent a different number of bytes than expected" );
 
-                /*
-                // Reveive user information of what was previously right neighbor
-                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
-                    DieWithError( "teardown: recvfrom() failed" );
-                r_neighbor = (struct dht_user*) msgBuffer;
-                printf("Right neigbor info received\n");
-
-                // Send rebuild-dht to query port of previous right neighbor
-                memset( &addr, 0, sizeof( addr ) );
-                addr.sin_family = AF_INET;
-                addr.sin_addr.s_addr = inet_addr( r_neighbor.ipAddr );
-                servAddr.sin_port = htons( r_neighbor.portQuery );
-                */
-
                 // Send rebuild-dht
                 rebuild.command = 14;
                 rebuild.addr = fromAddr;
@@ -484,6 +465,7 @@ int main( int argc, char *argv[] ) {
 
                 //Send dht_rebuilt to server
                 rebuilt.command = 15;
+                rebuilt.FLAG = 0;
                 strcpy(rebuilt.user_name, user_name);
                 strcpy(rebuilt.new_leader, new_leader);
                 if( sendto( sockServ, &rebuilt, sizeof(rebuilt), 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != sizeof(rebuilt) ) 
@@ -491,14 +473,154 @@ int main( int argc, char *argv[] ) {
             }
         }
 
-        else if( strcmp( token, "stop" ) == 0) {
-            char c = 100;
+        else if( strcmp(token, "join-dht") == 0) {      // JOIN-DHT COMMAND ------------------------------
+            struct join_dht join;
+            struct join_dht* response;
+            struct dht_user leader;
+            struct reset_left resetLeft;
+            struct reset_right resetRight;
+            struct teardown teardown;
+            struct reset_id reset;
+            struct dht_rebuilt rebuilt;
+            char* username;
 
-            if( sendto( sockServ, &c, 1, 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != 1 )
-       		    DieWithError( "sendto() sent a different number of bytes than expected" );
+            // Create datagram
+            username = strtok(NULL, " ");
+            join.command = 16;
+            strcpy(join.user_name, username);
 
-            close(sockServ);
-            exit(0);
+            // Send datagram to server
+            if( sendto( sockServ, &join, sizeof(join), 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != sizeof(join) ) 
+                DieWithError( "join-dht: sendto() sent a different number of bytes than expected" );
+
+            // Receive Success/Failure message. On success, receive the leader of the DHT
+            if( ( recvfrom( sockServ, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                DieWithError( "join-dht: recvfrom() failed" );
+
+
+            if( strcmp(msgBuffer, "FAILURE\n") == 0 ) {
+                printf("%s", (char *) msgBuffer);
+            }
+            // If success is received, rebuild dht
+            else {
+                // Set old leader as right neighbor
+                response = (struct join_dht*) msgBuffer;
+                leader = response->leader;
+
+                memset( &toAddr, 0, sizeof( struct sockaddr_in ) );
+                toAddr.sin_family = AF_INET;
+                toAddr.sin_addr.s_addr = inet_addr( leader.ipAddr );
+                toAddr.sin_port = htons( leader.portFrom );
+
+                //Set ID and ring size. This process becomes the leader
+                id = 0;
+                ring_size = response->ring_size + 1;
+                hashTable = calloc(353, sizeof(struct dht_entry*)); // Create space for hash table in memory
+
+                // Send reset_left / reset_right
+                resetLeft.command = 12;
+                resetLeft.newAddr = fromAddr;
+                resetLeft.port = htons( leader.portFrom );     // Used to identify which process is the left neighbor
+                resetRight.command = 13;
+                resetRight.newAddr = toAddr;
+
+                if( sendto( sockSend, &resetLeft, sizeof(resetLeft), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(resetLeft) ) 
+                    DieWithError( "reset_left: sendto() sent a different number of bytes than expected" );
+
+                if( sendto( sockSend, &resetRight, sizeof(resetRight), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(resetRight) ) 
+                    DieWithError( "reset_right: sendto() sent a different number of bytes than expected" );
+
+
+                // Send teardown to old leader
+                teardown.command = 10;
+                if( sendto( sockSend, &teardown, sizeof(teardown), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(teardown) ) 
+                    DieWithError( "teardown: sendto() sent a different number of bytes than expected" );
+
+                // Receive teardown message
+                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "teardown: recvfrom() failed" );
+                if( msgBuffer[0] != 10 ) {
+                    printf("Teardown error\n");
+                    break;
+                }
+
+                // Send reset_id to old leader / new right neighbor
+                reset.command = 11;
+                reset.id = 1;
+                reset.ring_size = ring_size;
+                if( sendto( sockSend, &reset, sizeof(reset), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(reset) ) 
+                    DieWithError( "reset_id: sendto() sent a different number of bytes than expected" );
+
+                // Receive reset_id message
+                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "reset_id: recvfrom() failed" );
+
+                // Build the DHT
+                populate_dht();
+
+                //Send dht_rebuilt to server
+                rebuilt.command = 15;
+                rebuilt.FLAG = 1;
+                strcpy(rebuilt.user_name, user_name);
+                strcpy(rebuilt.new_leader, user_name);
+                if( sendto( sockServ, &rebuilt, sizeof(rebuilt), 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != sizeof(rebuilt) ) 
+                    DieWithError( "dht_rebuilt: sendto() sent a different number of bytes than expected" );
+            }
+        }
+
+        else if( strcmp(token, "teardown-dht") == 0) {      // TEARDOWN-DHT COMMAND ------------------------------
+
+            struct teardown_dht datagram;
+            struct teardown teardown;
+            struct teardown_complete complete;
+            char* username;
+
+            // Create datagram
+            username = strtok(NULL, " ");
+            datagram.command = 17;
+            strcpy(datagram.user_name, username);
+
+            // Send datagram to server
+            if( sendto( sockServ, &datagram, sizeof(datagram), 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != sizeof(datagram) ) 
+                DieWithError( "teardown-dht: sendto() sent a different number of bytes than expected" );
+
+            // Receive Success/Failure message
+            if( ( recvfrom( sockServ, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                DieWithError( "teardown-dht: recvfrom() failed" );
+
+
+            if( strcmp(msgBuffer, "FAILURE\n") == 0 ) {
+                printf("%s", (char *) msgBuffer);
+            }
+            // If success is received, teardown dht
+            else {
+                // Send teardown to right neighbor
+                teardown.command = 10;
+                if( sendto( sockSend, &teardown, sizeof(teardown), 0, (struct sockaddr *) &toAddr, sizeof( toAddr ) ) != sizeof(teardown) ) 
+                    DieWithError( "teardown: sendto() sent a different number of bytes than expected" );
+
+                // Receive teardown message
+                if( ( recvfrom( sockRecv, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "teardown: recvfrom() failed" );
+                if( msgBuffer[0] != 10 ) {
+                    printf("Teardown error\n");
+                    break;
+                }
+
+                // Teardown this node
+                delete_dht();
+
+                // Send teardown-complete
+                complete.command = 18;
+                strcpy(complete.user_name, username);
+                if( sendto( sockServ, &complete, sizeof(complete), 0, (struct sockaddr *) &servAddr, sizeof( servAddr ) ) != sizeof(complete) ) 
+                    DieWithError( "teardown-complete: sendto() sent a different number of bytes than expected" );
+
+                // Receive Success/Failure message
+                if( ( recvfrom( sockServ, msgBuffer, BUFFERMAX, 0, (struct sockaddr *) &recvAddr, &recvAddrLen )) < 0 ) 
+                    DieWithError( "teardown-complete: recvfrom() failed" );
+                printf("%s", (char *) msgBuffer);
+            }
         }
 
         else if( strcmp( token, "test" ) == 0) {
@@ -693,7 +815,7 @@ void print_record(struct dht_entry record) {
     printf("Currency Unit: %s\n", record.currency);
     printf("Region       : %s\n", record.region);
     printf("WB-2 Code    : %s\n", record.wbCode);
-    printf("Latest Census: %s\n", record.latestCensus);
+    printf("Latest Census: %s\n\n", record.latestCensus);
 }
 
 void process_query(struct query* query) {
@@ -773,12 +895,14 @@ void delete_dht_list(struct dht_entry* chain) {  // Deletes chain from hash tabl
 
 /*
 
-run 10.120.70.145 29500
+./peer 10.120.70.145 29500
 
-register j 10.120.70.106 29501 29502 29503
+register i 10.120.70.106 29501 29502 29503
 
-register k 10.120.70.145 29504 29505 29506
+register j 10.120.70.145 29504 29505 29506
 
-register l 10.120.70.106 29507 29508 29509
+register k 10.120.70.106 29507 29508 29509
+
+register l 10.120.70.106 29510 29511 29512
 
 */

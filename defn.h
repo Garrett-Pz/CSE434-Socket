@@ -113,35 +113,53 @@ struct leave_dht {
 };
 
 struct teardown {
-    char command;  // command 10
-    char FLAG;          // 0: Just remove DHT  1: Do full teardown
+    char command;   // command 10
 };
 
 struct reset_id {
-    char command;  // command 11
+    char command;   // command 11
     int id;
+    int ring_size;
 };
 
 struct reset_left {
-    char command;  // command 12
+    char command;   // command 12
     unsigned short int port;
     struct sockaddr_in newAddr;
 };
 
 struct reset_right {
-    char command;  // command 13
+    char command;   // command 13
     struct sockaddr_in newAddr;
 };
 
 struct rebuild_dht {
-    char command;  // command 14
+    char command;   // command 14
     struct sockaddr_in addr;
 };
 
 struct dht_rebuilt {
-    char command;  // command 15
+    char command;   // command 15
+    int FLAG;       // 0: leave-dht   1: join-dht
     char user_name[16];
     char new_leader[16];
+};
+
+struct join_dht {
+    char command;   // command 16
+    char user_name[16];
+    struct dht_user leader;
+    int ring_size;
+};
+
+struct teardown_dht {
+    char command;    // command 17
+    char user_name[16];
+};
+
+struct teardown_complete {
+    char command;   // command 18
+    char user_name[16];
 };
 
 
